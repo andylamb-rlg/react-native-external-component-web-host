@@ -8,7 +8,7 @@ module.exports = {
     filename: 'bundle.js',
     library: 'RemoteComponent',
     libraryTarget: 'umd',
-    globalObject: 'this',
+    globalObject: 'typeof self !== \'undefined\' ? self : (typeof global !== \'undefined\' ? global : this)',
     umdNamedDefine: true,
   },
   resolve: {

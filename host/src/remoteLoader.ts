@@ -27,8 +27,8 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
           'http://localhost:3000/bundle.js'  // iOS simulator
         ];
     
-    // Start with the first URL
-    const bundleUrl = possibleUrls[0];
+    // Start with the first URL - ensure it's a plain string
+    const bundleUrl = String(possibleUrls[0]);
     
     console.log('Attempting to load bundle from:', bundleUrl, 'Will try alternatives if this fails');
 
@@ -223,17 +223,20 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
               }
             }, 10000);
             
-            // Fetch and execute the bundle
+            // Fetch and execute the bundle using async/await
             console.log('Fetching bundle from:', bundleUrl);
-            fetch(bundleUrl)
-              .then(response => {
+            
+            // Using async IIFE to handle the fetch and avoid Promise chaining issues
+            (async () => {
+              try {
+                const response = await fetch(bundleUrl);
                 console.log('Bundle fetch response:', response.status, response.statusText);
+                
                 if (!response.ok) {
                   throw new Error(`Network response was not ok: ${response.status}`);
                 }
-                return response.text();
-              })
-              .then(bundleText => {
+                
+                const bundleText = await response.text();
                 // Log bundle size and first few characters
                 console.log(`Bundle loaded, size: ${bundleText.length} bytes`);
                 console.log(`Bundle preview: ${bundleText.substring(0, 100)}...`);
@@ -382,8 +385,7 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
                 // Note: We're expecting the bundle to call global.onBundleLoad
                 // The promise will be resolved when that happens
                 console.log('Bundle execution complete, waiting for callback or RemoteComponent...');
-              })
-              .catch(error => {
+              } catch (error) {
                 console.error('Error fetching or evaluating bundle:', error);
                 // Check if the error is related to network or something else
                 const errorMessage = error instanceof Error ? error.message : String(error);
@@ -395,7 +397,8 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
                   console.error('Non-network error occurred during bundle loading');
                 }
                 reject(error);
-              });
+              }
+            })();
           });
           
           try {

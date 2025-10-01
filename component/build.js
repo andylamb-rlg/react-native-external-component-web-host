@@ -94,6 +94,44 @@ try {
   const webBundlePath = path.join(distDir, 'bundle.web.js');
   fs.writeFileSync(webBundlePath, webPolyfill + bundle);
   
+  // Now create versions that explicitly call onBundleLoad
+  logStep('Adding onBundleLoad callbacks to bundles');
+  
+  const bundleWrapper = `
+// This wrapper ensures the bundle calls onBundleLoad when loaded
+;(function() {
+  // Log that the bundle is loaded
+  console.log('[Bundle] Loaded and executed');
+  
+  // Determine the environment (web vs React Native)
+  var isWeb = typeof window !== 'undefined';
+  var globalObj = isWeb ? window : global;
+  
+  // Check if RemoteComponent was successfully assigned
+  if (typeof globalObj.RemoteComponent !== 'undefined') {
+    console.log('[Bundle] RemoteComponent found on global object');
+    
+    // Call the onBundleLoad callback if available
+    if (typeof globalObj.onBundleLoad === 'function') {
+      try {
+        console.log('[Bundle] Calling onBundleLoad with RemoteComponent');
+        globalObj.onBundleLoad(globalObj.RemoteComponent);
+      } catch (e) {
+        console.error('[Bundle] Error calling onBundleLoad:', e);
+      }
+    } else {
+      console.log('[Bundle] No onBundleLoad callback available');
+    }
+  } else {
+    console.warn('[Bundle] RemoteComponent not found on global object');
+  }
+})();
+`;
+  
+  // Update the bundles to include the wrapper
+  fs.writeFileSync(bundlePath, bundle + bundleWrapper);
+  fs.writeFileSync(webBundlePath, webPolyfill + bundle + bundleWrapper);
+  
   logStep('Component built successfully!');
   console.log(`
 Output files:
