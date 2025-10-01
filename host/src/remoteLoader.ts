@@ -1,5 +1,4 @@
-import { Platform } from 'react-native';
-import * as DynamicBundle from 'react-native-dynamic-bundle';
+import { Platform, NativeModules } from 'react-native';
 
 interface RemoteComponentType {
   ExternalComponent: React.ComponentType<{
@@ -101,23 +100,91 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
         tryLoadFromUrl(0);
       });
     } else {
-      // React Native implementation using DynamicBundle
-      await DynamicBundle.loadBundle(bundleUrl);
+      // For React Native Mobile Platforms
+      console.log('Attempting to load remote component on mobile from:', bundleUrl);
       
-      // We'd normally access the global.RemoteComponent here,
-      // but for simplicity and type safety, let's import the component directly
-      // This is simulating what would happen if the bundle sets a global
-      
-      // For this demo, we'll create a mock component since actual dynamic loading
-      // requires more complex native module setup
-      RemoteComponentCache = {
-        ExternalComponent: ({ message = 'Dynamic Component (Mocked)' }) => {
-          // This is a placeholder and would be replaced by the actual loaded component
-          return require('../components/FallbackComponent').default({ message });
+      try {
+        // Here are three different approaches you can use for dynamic bundle loading on mobile:
+
+        // APPROACH 1: Using Hermes engine's global.require functionality (Modern React Native)
+        // Check if we're running on Hermes engine
+        if ((global as any).HermesInternal) {
+          console.log('Using Hermes engine to load bundle');
+          
+          // For Hermes, we need to set up event to wait for bundle to load
+          const bundleLoadPromise = new Promise((resolve, reject) => {
+            // Set a global callback that the loaded bundle will call
+            (global as any).onBundleLoad = (exports: any) => {
+              console.log('Bundle loaded via global callback');
+              resolve(exports);
+            };
+            
+            // Set a timeout in case bundle fails to load
+            setTimeout(() => reject(new Error('Bundle load timeout')), 10000);
+          });
+          
+          // Create a script tag that will fetch the bundle
+          // The bundle should contain code that calls global.onBundleLoad with its exports
+          // For example: global.onBundleLoad({ ExternalComponent: MyComponent });
+          const scriptTag = document.createElement('script');
+          scriptTag.src = bundleUrl;
+          document.body.appendChild(scriptTag);
+          
+          // Wait for the bundle to load and call our callback
+          const bundleExports = await bundleLoadPromise;
+          RemoteComponentCache = bundleExports as RemoteComponentType;
         }
-      };
-      
-      return RemoteComponentCache;
+        // APPROACH 2: Using react-native-dynamic-bundle (if available)
+        else if (NativeModules.RNDynamicBundle) {
+          console.log('Using react-native-dynamic-bundle to load component');
+          
+          // Import dynamically to avoid issues if not installed
+          const DynamicBundleModule = require('react-native-dynamic-bundle');
+          const { registerBundle, setActiveBundle } = DynamicBundleModule;
+          
+          // For a real implementation, you would:
+          // 1. Download the bundle to local filesystem first
+          // 2. Register it with react-native-dynamic-bundle
+          // 3. Set it as active
+          // 4. Handle restarting the RN instance to apply it
+          
+          // This is a mock implementation for demo purposes
+          console.log('react-native-dynamic-bundle methods available:', 
+            Object.keys(DynamicBundleModule).join(', '));
+          
+          RemoteComponentCache = {
+            ExternalComponent: ({ message = 'Mobile Component (react-native-dynamic-bundle)' }) => {
+              return require('../components/FallbackComponent').default({ message });
+            }
+          };
+        } 
+        // APPROACH 3: Using the FallbackComponent directly
+        else {
+          console.log('Using fallback component as no dynamic loading method is available');
+          
+          RemoteComponentCache = {
+            ExternalComponent: ({ message = 'Mobile Component (Fallback)' }) => {
+              // This is a placeholder that would be replaced by the actual loaded component
+              // in a real implementation
+              return require('../components/FallbackComponent').default({ message });
+            }
+          };
+        }
+        
+        console.log('Remote component loaded or fallback used');
+        return RemoteComponentCache;
+      } catch (error) {
+        console.error('Error loading remote component on mobile:', error);
+        
+        // Always provide a fallback
+        RemoteComponentCache = {
+          ExternalComponent: ({ message = 'Error loading component' }) => {
+            return require('../components/FallbackComponent').default({ message });
+          }
+        };
+        
+        return RemoteComponentCache;
+      }
     }
   } catch (error) {
     console.error('Error loading remote component:', error);

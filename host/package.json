@@ -11,8 +11,8 @@
   },
   "dependencies": {
     "expo": "~54.0.10",
-    "react": "19.1.1",
-    "react-dom": "19.1.1",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.4",
     "react-native-dynamic-bundle": "^0.5.0",
     "react-native-web": "^0.21.1"
