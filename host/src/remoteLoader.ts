@@ -22,7 +22,10 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
           'http://localhost:3000/bundle.web.js',
           'http://127.0.0.1:3000/bundle.web.js'
         ]
-      : ['http://10.0.2.2:3000/bundle.js']; // 10.0.2.2 is localhost from Android emulator
+      : [
+          'http://10.0.2.2:3000/bundle.js',  // Android emulator - localhost equivalent
+          'http://localhost:3000/bundle.js'  // iOS simulator
+        ];
     
     // Start with the first URL
     const bundleUrl = possibleUrls[0];
@@ -115,74 +118,301 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
           console.log('Fetching bundle from URL:', bundleUrl);
           
           const bundleLoadPromise = new Promise((resolve, reject) => {
+            console.log('Setting up bundle load promise with callback and timeout');
+            
+            // Check if callback already exists from previous attempts
+            if ((global as any).onBundleLoad) {
+              console.log('Warning: onBundleLoad callback already exists, replacing it');
+            }
+            
             // Set a global callback that the loaded bundle will call
             (global as any).onBundleLoad = (exports: any) => {
-              console.log('Bundle loaded via global callback');
-              resolve(exports);
+              console.log('Bundle loaded via global callback with exports:', 
+                exports ? Object.keys(exports).join(', ') : 'no exports');
+              
+              // Check if exports have the expected shape
+              if (exports && exports.ExternalComponent) {
+                console.log('ExternalComponent found in exports, resolving promise');
+                resolve(exports);
+              } else {
+                console.warn('Exports do not contain ExternalComponent!', exports);
+                // Try to use RemoteComponent if available as fallback
+                if ((global as any).RemoteComponent) {
+                  console.log('Found RemoteComponent on global, using it as fallback');
+                  resolve((global as any).RemoteComponent);
+                } else {
+                  reject(new Error('Invalid exports format from bundle'));
+                }
+              }
             };
             
+            // Set up a check for RemoteComponent assignment as alternative to callback
+            const checkForRemoteComponent = () => {
+              if ((global as any).RemoteComponent) {
+                console.log('RemoteComponent found on global, resolving promise');
+                resolve((global as any).RemoteComponent);
+                return true;
+              }
+              return false;
+            };
+            
+            // Set a polling interval to check for RemoteComponent
+            const pollInterval = setInterval(() => {
+              if (checkForRemoteComponent()) {
+                clearInterval(pollInterval);
+              }
+            }, 500); // Check every 500ms
+            
             // Set a timeout in case bundle fails to load
-            setTimeout(() => reject(new Error('Bundle load timeout')), 10000);
+            setTimeout(() => {
+              clearInterval(pollInterval);
+              
+              console.error('Bundle load timeout! Bundle execution completed but onBundleLoad was never called');
+              
+              // Detailed diagnostics of what happened
+              console.log('Bundle execution state:', {
+                executionStarted: (global as any).__bundleExecutionStarted ? 'Yes' : 'No',
+                executionCompleted: (global as any).__bundleExecutionCompleted ? 'Yes' : 'No',
+                executionError: (global as any).__bundleExecutionError || 'None',
+                timeElapsed: (global as any).__bundleExecutionStarted ? 
+                  `${Date.now() - (global as any).__bundleExecutionStarted}ms` : 'Unknown'
+              });
+              
+              // Display available global properties to help diagnose the issue
+              const globalKeys = Object.keys(global).filter(key => !key.startsWith('_'));
+              console.log('Global object keys available:', globalKeys.join(', '));
+              
+              // Check for React component-like objects that might have been exported incorrectly
+              const possibleComponents = globalKeys.filter(key => {
+                const value = (global as any)[key];
+                return (
+                  typeof value === 'function' || 
+                  (typeof value === 'object' && value !== null && 
+                   (typeof value.render === 'function' || typeof value.ExternalComponent === 'function' || typeof value.default === 'function'))
+                );
+              });
+              
+              if (possibleComponents.length > 0) {
+                console.log('Possible component objects found on global:', possibleComponents.join(', '));
+                
+                // Try to use one of these as a last resort
+                for (const key of possibleComponents) {
+                  const value = (global as any)[key];
+                  if (typeof value.ExternalComponent === 'function') {
+                    console.log(`Found potential component at global.${key}.ExternalComponent, attempting to use it`);
+                    resolve({ ExternalComponent: value.ExternalComponent });
+                    return;
+                  } else if (typeof value.default === 'function') {
+                    console.log(`Found potential component at global.${key}.default, attempting to use it`);
+                    resolve({ ExternalComponent: value.default });
+                    return;
+                  } else if (typeof value === 'function') {
+                    console.log(`Found potential component function at global.${key}, attempting to use it`);
+                    resolve({ ExternalComponent: value });
+                    return;
+                  }
+                }
+              }
+              
+              // Final attempt to check for RemoteComponent
+              if (!checkForRemoteComponent()) {
+                console.error('RemoteComponent not found on global object after timeout');
+                console.log('Bundle URL attempted:', bundleUrl);
+                console.log('Suggestion: Check the bundle format and ensure it properly calls global.onBundleLoad or sets global.RemoteComponent');
+                reject(new Error('Bundle load timeout - component not exposed correctly'));
+              }
+            }, 10000);
             
             // Fetch and execute the bundle
+            console.log('Fetching bundle from:', bundleUrl);
             fetch(bundleUrl)
               .then(response => {
+                console.log('Bundle fetch response:', response.status, response.statusText);
                 if (!response.ok) {
                   throw new Error(`Network response was not ok: ${response.status}`);
                 }
                 return response.text();
               })
               .then(bundleText => {
-                // Execute the bundle code in the global context
-                console.log('Evaluating bundle code in Hermes...');
+                // Log bundle size and first few characters
+                console.log(`Bundle loaded, size: ${bundleText.length} bytes`);
+                console.log(`Bundle preview: ${bundleText.substring(0, 100)}...`);
                 
-                // First, expose React and ReactNative to the global scope
+                // Analyze bundle content to provide guidance
+                const bundleAnalysis = {
+                  containsJSX: bundleText.includes('React.createElement') || bundleText.includes('createElement('),
+                  containsStyleSheet: bundleText.includes('StyleSheet.create') || bundleText.includes('StyleSheet'),
+                  hasExports: bundleText.includes('module.exports') || bundleText.includes('export default') || 
+                              bundleText.includes('export const') || bundleText.includes('export function'),
+                  hasGlobalAssignment: bundleText.includes('global.') || bundleText.includes('window.'),
+                  hasOnBundleLoad: bundleText.includes('onBundleLoad'),
+                  hasRemoteComponent: bundleText.includes('RemoteComponent'),
+                  isMinified: bundleText.split('\n').length < 20 && bundleText.length > 500
+                };
+                
+                console.log('Bundle analysis:', bundleAnalysis);
+                
+                // Provide guidance based on analysis
+                if (!bundleAnalysis.hasOnBundleLoad && !bundleAnalysis.hasRemoteComponent) {
+                  console.warn('Warning: Bundle does not appear to call onBundleLoad or set RemoteComponent');
+                  console.log('Suggestion: Ensure your bundle contains code like: global.onBundleLoad({ExternalComponent: MyComponent})');
+                }
+                
+                if (bundleAnalysis.isMinified) {
+                  console.log('Note: Bundle appears to be minified, which can sometimes cause issues with Hermes');
+                }
+                
+                // Execute the bundle code in the global context
+                console.log('Preparing to evaluate bundle in Hermes environment');
+                
+                // Create a secure execution environment
                 try {
-                  // Import the modules and expose them globally for the bundle to use
+                  console.log('Setting up global dependencies');
+                  
+                  // 1. Store any existing onBundleLoad handler
+                  const originalOnBundleLoad = (global as any).onBundleLoad;
+                  
+                  // 2. Create a clean React/ReactNative environment
                   const React = require('react');
                   const ReactNative = require('react-native');
                   
-                  // Make sure they're available in the global scope
-                  (global as any).React = React;
-                  (global as any).ReactNative = ReactNative;
+                  // 3. Set up the environment with all necessary dependencies
+                  Object.assign(global, {
+                    // Core libraries
+                    React,
+                    ReactNative,
+                    
+                    // Common aliases and helpers
+                    StyleSheet: ReactNative.StyleSheet,
+                    
+                    // Track execution
+                    __bundleExecutionStarted: Date.now(),
+                    __bundleExecutionCompleted: false,
+                    
+                    // Ensure original handler is preserved if needed
+                    __originalOnBundleLoad: originalOnBundleLoad
+                  });
                   
-                  // Also create an alias to ReactNative.StyleSheet directly for common usage
-                  (global as any).StyleSheet = ReactNative.StyleSheet;
+                  console.log('Environment prepared for bundle execution');
+                  console.log('React Native components available:', 
+                    Object.keys(ReactNative)
+                      .filter(k => typeof ReactNative[k] === 'function' || typeof ReactNative[k] === 'object')
+                      .join(', '));
                   
-                  console.log('Successfully exposed React and ReactNative to global scope for Hermes');
-                } catch (err) {
-                  console.warn('Error exposing React to global scope for Hermes:', err);
+                  // Execute the bundle using the most compatible approach
+                  console.log('Executing bundle...');
+                  
+                  // Method 1: Direct eval in global context (most compatible)
+                  try {
+                    // Add execution markers
+                    const enhancedBundle = `
+                      try {
+                        // Original bundle code follows
+                        ${bundleText}
+                        // End of original bundle
+                        
+                        // Mark successful execution
+                        global.__bundleExecutionCompleted = true;
+                        global.__bundleExecutionError = null;
+                        
+                        // Log completion if no error
+                        console.log('[Bundle Loader] Bundle executed successfully');
+                      } catch (e) {
+                        // Capture any error during execution
+                        global.__bundleExecutionError = e;
+                        console.error('[Bundle Loader] Error during bundle execution:', e);
+                        throw e; // Re-throw for outer handler
+                      }
+                    `;
+                    
+                    // Execute in global context
+                    global.eval(enhancedBundle);
+                    console.log('Bundle execution completed via eval');
+                    
+                    // Check for remote component
+                    checkForRemoteComponent();
+                  } catch (evalError) {
+                    console.error('Error during bundle eval:', evalError);
+                    
+                    // Fallback to Function constructor method
+                    console.log('Trying Function constructor method as fallback...');
+                    try {
+                      const evalFn = new Function('global', 'React', 'ReactNative', bundleText);
+                      evalFn(global, React, ReactNative);
+                      console.log('Bundle execution completed via Function constructor');
+                      
+                      // Check for component
+                      checkForRemoteComponent();
+                    } catch (funcError) {
+                      console.error('Function constructor method also failed:', funcError);
+                      
+                      // Last resort: Try a minimal wrapper that handles common module patterns
+                      console.log('Trying minimal CommonJS-style wrapper as last resort...');
+                      try {
+                        const wrappedBundle = `
+                          (function(exports, require, module, __filename, __dirname, global, React, ReactNative) {
+                            ${bundleText}
+                          })(
+                            {}, 
+                            require, 
+                            { exports: {} }, 
+                            "bundle.js", 
+                            "/", 
+                            global,
+                            global.React,
+                            global.ReactNative
+                          );
+                        `;
+                        global.eval(wrappedBundle);
+                        console.log('Bundle execution completed via CommonJS wrapper');
+                        
+                        // Check for component
+                        checkForRemoteComponent();
+                      } catch (wrappedError) {
+                        console.error('All bundle execution methods failed');
+                        reject(new Error('Bundle execution failed with all methods'));
+                      }
+                    }
+                  }
+                } catch (setupError) {
+                  console.error('Error setting up bundle execution environment:', setupError);
+                  reject(new Error(`Failed to set up bundle execution environment: ${setupError instanceof Error ? setupError.message : 'Unknown error'}`));
                 }
                 
-                // Use Function constructor to evaluate the code in global context with proper context
-                const evalFn = new Function(
-                  'global', 'React', 'ReactNative', 'StyleSheet', 
-                  bundleText
-                );
-                evalFn(
-                  global, 
-                  (global as any).React, 
-                  (global as any).ReactNative,
-                  (global as any).ReactNative?.StyleSheet
-                );
                 // Note: We're expecting the bundle to call global.onBundleLoad
                 // The promise will be resolved when that happens
+                console.log('Bundle execution complete, waiting for callback or RemoteComponent...');
               })
               .catch(error => {
                 console.error('Error fetching or evaluating bundle:', error);
+                // Check if the error is related to network or something else
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                if (errorMessage.includes('Network request failed') || errorMessage.includes('NETWORK_ERROR')) {
+                  console.error('Network error detected. Make sure the bundle URL is accessible from the device.');
+                  console.error(`URL being accessed: ${bundleUrl}`);
+                  console.error('If running in an emulator, ensure you\'re using the correct IP address (10.0.2.2 for Android emulator)');
+                } else {
+                  console.error('Non-network error occurred during bundle loading');
+                }
                 reject(error);
               });
           });
           
           try {
             // Wait for the bundle to load and call our callback
+            console.log('Awaiting bundle load promise resolution...');
             const bundleExports = await bundleLoadPromise;
+            console.log('Bundle load promise resolved with exports');
             RemoteComponentCache = bundleExports as RemoteComponentType;
           } catch (error) {
             console.error('Error waiting for bundle to load:', error);
+            console.error('Bundle load failed, creating fallback component');
+            
             // Provide a fallback component if bundle loading fails
             RemoteComponentCache = {
-              ExternalComponent: ({ message = 'Hermes Bundle Load Failed' }) => {
+              ExternalComponent: ({ message = 'Hermes Bundle Load Failed: ' + 
+                (error instanceof Error ? error.message : 'Unknown error') }) => {
+                console.log('Rendering fallback component due to load failure');
                 return require('../components/FallbackComponent').default({ message });
               }
             };
