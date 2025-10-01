@@ -64,6 +64,32 @@ try {
   const bundlePath = path.join(distDir, 'bundle.js');
   const bundle = fs.readFileSync(bundlePath, 'utf8');
   
+  // Read the bundle wrapper that ensures onBundleLoad is called
+  const wrapperPath = path.join(distDir, 'bundle-wrapper.js');
+  let wrapper = '';
+  if (fs.existsSync(wrapperPath)) {
+    wrapper = fs.readFileSync(wrapperPath, 'utf8');
+  } else {
+    // Create wrapper if it doesn't exist
+    wrapper = `
+// This wrapper ensures the bundle calls global.onBundleLoad when loaded
+(function() {
+  if (typeof global !== 'undefined' && global.onBundleLoad && typeof global.RemoteComponent !== 'undefined') {
+    console.log('[bundle-wrapper] Detected RemoteComponent, calling onBundleLoad');
+    global.onBundleLoad(global.RemoteComponent);
+  } else if (typeof window !== 'undefined' && window.onBundleLoad && typeof window.RemoteComponent !== 'undefined') {
+    console.log('[bundle-wrapper] Detected RemoteComponent in window, calling window.onBundleLoad');
+    window.onBundleLoad(window.RemoteComponent);
+  } else {
+    console.warn('[bundle-wrapper] Could not call onBundleLoad: callback or RemoteComponent not found');
+  }
+})();`;
+    fs.writeFileSync(wrapperPath, wrapper);
+  }
+  
+  // Update the main bundle to include the wrapper
+  fs.writeFileSync(bundlePath, bundle + '\n' + wrapper);
+  
   // Create a web-specific version with polyfills
   const webBundlePath = path.join(distDir, 'bundle.web.js');
   fs.writeFileSync(webBundlePath, webPolyfill + bundle);
