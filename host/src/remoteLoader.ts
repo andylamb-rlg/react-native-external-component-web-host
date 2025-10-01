@@ -111,7 +111,9 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
         if ((global as any).HermesInternal) {
           console.log('Using Hermes engine to load bundle');
           
-          // For Hermes, we need to set up event to wait for bundle to load
+          // For React Native mobile, we need to use the fetch API instead of DOM methods
+          console.log('Fetching bundle from URL:', bundleUrl);
+          
           const bundleLoadPromise = new Promise((resolve, reject) => {
             // Set a global callback that the loaded bundle will call
             (global as any).onBundleLoad = (exports: any) => {
@@ -121,18 +123,43 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
             
             // Set a timeout in case bundle fails to load
             setTimeout(() => reject(new Error('Bundle load timeout')), 10000);
+            
+            // Fetch and execute the bundle
+            fetch(bundleUrl)
+              .then(response => {
+                if (!response.ok) {
+                  throw new Error(`Network response was not ok: ${response.status}`);
+                }
+                return response.text();
+              })
+              .then(bundleText => {
+                // Execute the bundle code in the global context
+                console.log('Evaluating bundle code in Hermes...');
+                // Use Function constructor to evaluate the code in global context
+                const evalFn = new Function('global', bundleText);
+                evalFn(global);
+                // Note: We're expecting the bundle to call global.onBundleLoad
+                // The promise will be resolved when that happens
+              })
+              .catch(error => {
+                console.error('Error fetching or evaluating bundle:', error);
+                reject(error);
+              });
           });
           
-          // Create a script tag that will fetch the bundle
-          // The bundle should contain code that calls global.onBundleLoad with its exports
-          // For example: global.onBundleLoad({ ExternalComponent: MyComponent });
-          const scriptTag = document.createElement('script');
-          scriptTag.src = bundleUrl;
-          document.body.appendChild(scriptTag);
-          
-          // Wait for the bundle to load and call our callback
-          const bundleExports = await bundleLoadPromise;
-          RemoteComponentCache = bundleExports as RemoteComponentType;
+          try {
+            // Wait for the bundle to load and call our callback
+            const bundleExports = await bundleLoadPromise;
+            RemoteComponentCache = bundleExports as RemoteComponentType;
+          } catch (error) {
+            console.error('Error waiting for bundle to load:', error);
+            // Provide a fallback component if bundle loading fails
+            RemoteComponentCache = {
+              ExternalComponent: ({ message = 'Hermes Bundle Load Failed' }) => {
+                return require('../components/FallbackComponent').default({ message });
+              }
+            };
+          }
         }
         // APPROACH 2: Using react-native-dynamic-bundle (if available)
         else if (NativeModules.RNDynamicBundle) {
