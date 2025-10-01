@@ -135,9 +135,36 @@ export const loadRemoteComponent = async (): Promise<RemoteComponentType> => {
               .then(bundleText => {
                 // Execute the bundle code in the global context
                 console.log('Evaluating bundle code in Hermes...');
-                // Use Function constructor to evaluate the code in global context
-                const evalFn = new Function('global', bundleText);
-                evalFn(global);
+                
+                // First, expose React and ReactNative to the global scope
+                try {
+                  // Import the modules and expose them globally for the bundle to use
+                  const React = require('react');
+                  const ReactNative = require('react-native');
+                  
+                  // Make sure they're available in the global scope
+                  (global as any).React = React;
+                  (global as any).ReactNative = ReactNative;
+                  
+                  // Also create an alias to ReactNative.StyleSheet directly for common usage
+                  (global as any).StyleSheet = ReactNative.StyleSheet;
+                  
+                  console.log('Successfully exposed React and ReactNative to global scope for Hermes');
+                } catch (err) {
+                  console.warn('Error exposing React to global scope for Hermes:', err);
+                }
+                
+                // Use Function constructor to evaluate the code in global context with proper context
+                const evalFn = new Function(
+                  'global', 'React', 'ReactNative', 'StyleSheet', 
+                  bundleText
+                );
+                evalFn(
+                  global, 
+                  (global as any).React, 
+                  (global as any).ReactNative,
+                  (global as any).ReactNative?.StyleSheet
+                );
                 // Note: We're expecting the bundle to call global.onBundleLoad
                 // The promise will be resolved when that happens
               })
